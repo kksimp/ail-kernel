@@ -1,0 +1,418 @@
+diff --git a/compiler/a64/gen.ail b/compiler/a64/gen.ail
+index 542f5d41..f5c73434 100644
+--- a/compiler/a64/gen.ail
++++ b/compiler/a64/gen.ail
+@@ -1215,6 +1215,9 @@ fn Gen.prim(mut self, i mir.Inst)
+             a.dmb_ish()
+         "pfence_io" =>
+             a.dsb_sy()
++        # x86-64 port I/O and halt: no ARM64 form yet (ADR 0953, `aarch64-none`).
++        "port_out8" | "port_in8" | "halt" =>
++            a.brk()
+         "storef" =>
+             pl := address(i)
+             v := fpr(i.arg(i.argc() - 1), X0)
+diff --git a/compiler/codegen/alloc.ail b/compiler/codegen/alloc.ail
+index b6eaccf5..34157e47 100644
+--- a/compiler/codegen/alloc.ail
++++ b/compiler/codegen/alloc.ail
+@@ -78,7 +78,14 @@ pub fn is_call(i mir.Inst) bool
+     if i.op == "call"
+         return not is_push(i)
+     i.op == "icall"
+-        or i.op == "prim" and (i.name == "syscall" or i.name == "clone" or i.name == "restart" or i.name == "sigreturn")
++        or i.op == "prim"
++            and (
++                i.name == "syscall"
++                or i.name == "clone"
++                or i.name == "restart"
++                or i.name == "sigreturn"
++                or i.name.starts_with("port_")
++            )
+ 
+ pub fn is_push(i mir.Inst) bool
+     i.op == "call" and mir.is_push_name(i.name)
+diff --git a/compiler/main.ail b/compiler/main.ail
+index 11efb0a7..d3021af9 100644
+--- a/compiler/main.ail
++++ b/compiler/main.ail
+@@ -199,7 +199,7 @@ fn main() !
+             io.eprint("unknown command {args[0]}")
+             io.exit(2)
+ 
+-BUILD_USAGE := "usage: ail build FILE [-o OUT] [--target x86_64-linux|aarch64-linux|aarch64-macos|x86_64-windows|aarch64-windows (experimental, unverified)] [--no-cache] [--attach] [--timeout MS] [--max-memory MB]"
++BUILD_USAGE := "usage: ail build FILE [-o OUT] [--target x86_64-linux|aarch64-linux|aarch64-macos|x86_64-none|x86_64-windows|aarch64-windows (experimental, unverified)] [--no-cache] [--attach] [--timeout MS] [--max-memory MB]"
+ 
+ ## A positive whole number (run.limit.4).
+ fn positive(v str) bool
+@@ -497,6 +497,8 @@ fn executable_list(m mir.Module, path str, target str) List[u8]
+     match target
+         "x86_64-linux" => obj.elf(x64.generate(m), obj.X86_64)
+         "aarch64-linux" => obj.elf(a64.generate(m, a64.LINUX), obj.AARCH64)
++        # Freestanding (ADR 0953): the arena matches NONE_ARENA in rt/native/none.ail.
++        "x86_64-none" => obj.elf_none(x64.generate_none(m), obj.X86_64, 268435456)
+         "x86_64-windows" => obj.pe_image(x64.generate_windows(m))
+         "aarch64-windows" => obj.pe_image_for(a64.generate(m, a64.WINDOWS), obj.PE_ARM64)
+         "aarch64-macos" =>
+diff --git a/compiler/mir/lower.ail b/compiler/mir/lower.ail
+index 5fd09669..2a07b9a2 100644
+--- a/compiler/mir/lower.ail
++++ b/compiler/mir/lower.ail
+@@ -217,6 +217,9 @@ PRIMS := {
+     "fn_addr": "int",
+     "gc_regs": "int",
+     "globals_end": "int",
++    "port_out8": "unit",
++    "port_in8": "int",
++    "halt": "unit",
+ }
+ 
+ ## Lower a program and, when given, the runtime; `Problems` lists what is
+diff --git a/compiler/obj/elf.ail b/compiler/obj/elf.ail
+index a3450d5a..509a1128 100644
+--- a/compiler/obj/elf.ail
++++ b/compiler/obj/elf.ail
+@@ -18,20 +18,33 @@ pub AARCH64 := 183
+ pub fn elf(img codegen.Image, machine int) List[u8]
+     if img.imports.len() > 0
+         return elf_dynamic(img, machine)
++    elf_at(img, machine, BASE, 0)
++
++## The freestanding image (ADR 0953): linked in the higher half, where Limine
++## loads a kernel, with a static arena of `arena` bytes after the globals.
++pub fn elf_none(img codegen.Image, machine int, arena int) List[u8]
++    elf_at(img, machine, NONE_BASE, arena)
++
++## The base of the higher half (0xffffffff80000000 as a signed number).
++NONE_BASE := -2147483648
++
++fn elf_at(img codegen.Image, machine int, base int, arena int) List[u8]
+     code_off := EHDR + 2 * PHDR
+     data_off := align_up(code_off + img.code.len(), 16)
+     size := data_off + img.data.len()
+-    bss := align_up(BASE + size, PAGE)
+-    code := link(img, BASE + code_off, BASE + data_off, bss)
++    # `base` is page aligned, so align the offset: a negative base would
++    # round the wrong way in `align_up`.
++    bss := base + align_up(size, PAGE)
++    code := link(img, base + code_off, base + data_off, bss)
+     mut out := List[u8]()
+-    header(mut out, machine, BASE + code_off + img.entry)
+-    segment(mut out, 5, 0, BASE, size, size)
+-    segment(mut out, 6, 0, bss, 0, 8 * img.globals)
++    header(mut out, machine, base + code_off + img.entry)
++    segment(mut out, 5, 0, base, size, size)
++    segment(mut out, 6, 0, bss, 0, 8 * img.globals + arena)
+     out.extend(code)
+     while out.len() < data_off
+         out.push(0.to_u8())
+     out.extend(img.data)
+-    symbols(mut out, img, BASE + code_off, code_off)
++    symbols(mut out, img, base + code_off, code_off)
+     out
+ 
+ ## `.text`, `.symtab`, `.strtab` and `.shstrtab`, then the section headers,
+diff --git a/compiler/rt/native/core.ail b/compiler/rt/native/core.ail
+index 5767e628..a05a1f3f 100644
+--- a/compiler/rt/native/core.ail
++++ b/compiler/rt/native/core.ail
+@@ -50,6 +50,9 @@ MAXW := 64
+ 
+ fn sys_write(fd int, p int, n int)
+     t := target()
++    if t == 4
++        none_write(p, n)
++        return
+     if t == 3
+         # Windows output (ADR 0608): `WriteFile` (win.ail) on the standard handle until every byte is written.
+         # A failed write ends the output, as on the other targets.
+@@ -75,6 +78,9 @@ fn sys_exit(status int)
+     instr_dump()
+     code := race_exit(status)
+     t := target()
++    if t == 4
++        none_exit(code)
++        return
+     if t == 3
+         import_call("ExitProcess", code, 0, 0, 0)
+         return
+@@ -83,6 +89,8 @@ fn sys_exit(status int)
+ 
+ fn sys_mmap(n int) int
+     t := target()
++    if t == 4
++        return none_mmap(n)
+     # MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE (ADR 0608).
+     if t == 3
+         p := import_call("VirtualAlloc", 0, n, 12288, 4)
+@@ -94,6 +102,8 @@ fn sys_mmap(n int) int
+ ## A thread-stack region: `n` bytes that need no commit up front.
+ fn sys_mmap_lazy(n int) int
+     t := target()
++    if t == 4
++        return none_mmap(n)
+     k := if t == 0 then 9 else if t == 1 then 222 else 197
+     flags := if t == 2 then 4098 else 16418
+     syscall(k, 0, n, 3, flags, -1, 0)
+@@ -231,6 +241,8 @@ fn out_unlock()
+ 
+ ## Called by the entry with the process's argument count and vector.
+ fn init(argc int, argv int)
++    if target() == 4
++        none_init()
+     store64(global(ARGC), argc)
+     store64(global(ARGV), argv)
+     store64(global(OUT_BUF), sys_mmap(OUT_CAP))
+@@ -241,14 +253,18 @@ fn init(argc int, argv int)
+         win_args_init()
+     # After `win_args_init`: on Windows that builds the environment, so the
+     # settings (`AIL_TIMEOUT_MS`, `AIL_MAX_MEMORY_MB`, `AIL_GC_STATS`, `AIL_GC_VERIFY`) are not seen before it.
+-    limits_init()
+-    # After the Windows environment is built, or `AIL_LEAK` is not seen there (san.leak.3).
+-    leak := os_env_get("AIL_LEAK")
+-    if leak != ""
+-        leak_setup(leak)
++    # No environment on a freestanding target (ADR 0953).
++    if target() != 4
++        limits_init()
++        # After the Windows environment is built, or `AIL_LEAK` is not seen there (san.leak.3).
++        leak := os_env_get("AIL_LEAK")
++        if leak != ""
++            leak_setup(leak)
+     # The argument vector sits at the top of the main stack. Windows
+     # (target 3) has no argument vector there: the thread's own bounds say how far the stack goes.
+-    if target() != 3
++    if target() == 4
++        store64(global(STACK_LIMIT), argv - NONE_STACK_USE)
++    elif target() != 3
+         store64(global(STACK_LIMIT), argv - stack_use())
+     else
+         p := alloc(16, KIND_ATOMIC)
+diff --git a/compiler/rt/native/heap.ail b/compiler/rt/native/heap.ail
+index cb725ff1..3d3652b4 100644
+--- a/compiler/rt/native/heap.ail
++++ b/compiler/rt/native/heap.ail
+@@ -72,6 +72,8 @@ KIND_ATOMIC := 11
+ ## memory until touched. A negative result is the error.
+ fn heap_reserve(n int) int
+     t := target()
++    if t == 4
++        return none_mmap(n)
+     # Windows has no overcommit: MEM_COMMIT | MEM_RESERVE counts against the
+     # commit limit, and a refusal (0) is the error the size loop halves on
+     # (ADR 0608).
+diff --git a/compiler/rt/native/none.ail b/compiler/rt/native/none.ail
+new file mode 100644
+index 00000000..13d00cf5
+--- /dev/null
++++ b/compiler/rt/native/none.ail
+@@ -0,0 +1,55 @@
++## Runtime: part of the AIL native runtime; linked into user executables
++## under the Runtime Exception (see LICENSE).
++##
++## The freestanding target `x86_64-none` (`target()` is 4, ADR 0953): no
++## operating system under the program. Memory is a static arena in the ELF's
++## zero-filled segment, output is the COM1 serial port, and exit writes
++## QEMU's `isa-debug-exit` port and halts. No other system service exists.
++
++## The 16550 UART's first port.
++NONE_COM1 := 1016
++## QEMU's `isa-debug-exit` device (`-device isa-debug-exit,iobase=0xf4`).
++NONE_EXIT_PORT := 244
++## The static arena after the globals (obj/elf.ail reserves the same size):
++## its first word is the bump offset, 0 until the first request.
++NONE_ARENA := 268435456
++## The part of the entry stack the runtime treats as usable.
++NONE_STACK_USE := 32768
++
++## Set up the serial port: 115200 8N1, FIFO on, no interrupts.
++fn none_init()
++    port_out8(NONE_COM1 + 1, 0)
++    port_out8(NONE_COM1 + 3, 128)
++    port_out8(NONE_COM1, 1)
++    port_out8(NONE_COM1 + 1, 0)
++    port_out8(NONE_COM1 + 3, 3)
++    port_out8(NONE_COM1 + 2, 199)
++    port_out8(NONE_COM1 + 4, 11)
++
++fn none_putc(b int)
++    mut spins := 0
++    while port_in8(NONE_COM1 + 5).bit_and(32) == 0 and spins < 1000000
++        spins += 1
++    port_out8(NONE_COM1, b)
++
++fn none_write(p int, n int)
++    for i in 0..n
++        none_putc(load8(p + i))
++
++## Write the exit code and halt for good. QEMU exits with `(code << 1) | 1`.
++fn none_exit(code int)
++    port_out8(NONE_EXIT_PORT, code)
++    while true
++        halt()
++
++## `n` bytes from the arena, 16-aligned and zeroed, or -1 when it is full.
++fn none_mmap(n int) int
++    base := globals_end()
++    mut cur := load64(base)
++    if cur == 0
++        cur = (base + 4111) / 16 * 16
++    size := (n + 15) / 16 * 16
++    if cur + size > base + NONE_ARENA
++        return -1
++    store64(base, cur + size)
++    cur
+diff --git a/compiler/rt/native/prim.ail b/compiler/rt/native/prim.ail
+index 1796c50f..7f2eb1cf 100644
+--- a/compiler/rt/native/prim.ail
++++ b/compiler/rt/native/prim.ail
+@@ -71,10 +71,21 @@ fn gc_regs(buf int) int
+ fn globals_end() int
+     todo
+ 
+-## The target: 0 Linux x86-64, 1 Linux ARM64, 2 macOS ARM64.
++## The target: 0 Linux x86-64, 1 Linux ARM64, 2 macOS ARM64, 3 Windows,
++## 4 freestanding x86-64 (ADR 0953).
+ fn target() int
+     todo
+ 
++## Freestanding targets only (ADR 0953): byte port I/O (x86-64) and halt.
++fn port_out8(port int, v int)
++    todo
++
++fn port_in8(port int) int
++    todo
++
++fn halt()
++    todo
++
+ ## The address of the call table (`trace.tab`, trace.frame.1).
+ fn code_tab() int
+     todo
+diff --git a/compiler/x64/asm.ail b/compiler/x64/asm.ail
+index 57125946..312a192d 100644
+--- a/compiler/x64/asm.ail
++++ b/compiler/x64/asm.ail
+@@ -472,6 +472,16 @@ pub fn Asm.lock_xadd(mut self, m Mem, r int)
+     byte(240)
+     op_rm(true, 193, r, m)
+ 
++## `out dx, al`, `in al, dx` and `hlt` (freestanding targets, ADR 0953).
++pub fn Asm.out_dx_al(mut self)
++    byte(238)
++
++pub fn Asm.in_al_dx(mut self)
++    byte(236)
++
++pub fn Asm.hlt(mut self)
++    byte(244)
++
+ pub fn Asm.ud2(mut self)
+     byte(15)
+     byte(11)
+diff --git a/compiler/x64/gen.ail b/compiler/x64/gen.ail
+index a614adae..44122053 100644
+--- a/compiler/x64/gen.ail
++++ b/compiler/x64/gen.ail
+@@ -55,6 +55,8 @@ struct Gen
+     a Asm
+     ## The Windows target (ADR 0608): `target()` is 3.
+     win bool
++    ## The freestanding target (ADR 0953): `target()` is 4.
++    none bool
+     ## What the function needs from the image and the module, without a copy
+     ## of either per function: the sites (shared), the globals' size, and the
+     ## requests `gen_func` replays on the image afterwards, in order.
+@@ -92,6 +94,15 @@ struct Gen
+ 
+ ## Generate the whole program: `_start`, then each function.
+ pub fn generate(m mir.Module) codegen.Image
++    generate_for(m, false)
++
++## The freestanding target `x86_64-none` (ADR 0953): the bootloader enters
++## `_start` in 64-bit mode with a valid stack, so there is no `argc`/`argv`;
++## the entry stack pointer is passed as the stack top.
++pub fn generate_none(m mir.Module) codegen.Image
++    generate_for(m, true)
++
++fn generate_for(m mir.Module, none bool) codegen.Image
+     mut img := codegen.new_image()
+     img.globals = m.globals_used()
+     for i in 0..m.strs.len()
+@@ -101,8 +112,12 @@ pub fn generate(m mir.Module) codegen.Image
+     # _start: pass argc and argv to `rt.init`, align the stack, run `main`,
+     # exit 0.
+     a.alu_rr("xor", RBP, RBP)
+-    a.mov_rm(RDI, at(RSP, 0))
+-    a.lea(RSI, at(RSP, 8))
++    if none
++        a.mov_ri(RDI, 0)
++        a.mov_rr(RSI, RSP)
++    else
++        a.mov_rm(RDI, at(RSP, 0))
++        a.lea(RSI, at(RSP, 8))
+     a.alu_ri("and", RSP, -16)
+     a.call_sym("rt.init")
+     a.call_sym("main")
+@@ -116,12 +131,12 @@ pub fn generate(m mir.Module) codegen.Image
+         if is_kernel(f.name)
+             gen_kernel(mut img, f.name)
+         else
+-            gen_func(mut img, m, sites, f, false)
++            gen_func(mut img, m, sites, f, false, none)
+     codegen.add_call_table(mut img, m)
+     img
+ 
+ ## `win` is set for the Windows target: `target()` is then 3 (ADR 0608).
+-fn gen_func(mut img codegen.Image, m mir.Module, sites ref codegen.Sites, f0 mir.Func, win bool)
++fn gen_func(mut img codegen.Image, m mir.Module, sites ref codegen.Sites, f0 mir.Func, win bool, none bool)
+     f := codegen.split_for_calls(codegen.split_edges(f0))
+     al := codegen.allocate(f, registers())
+     mut remat := [mir.inst(-1, "", []) for _ in 0..f.vals.len()]
+@@ -149,6 +164,7 @@ fn gen_func(mut img codegen.Image, m mir.Module, sites ref codegen.Sites, f0 mir
+     mut g := Gen(
+         a: new_asm(),
+         win: win,
++        none: none,
+         sites: sites,
+         nglobals: img.globals,
+         calls: [],
+@@ -1383,6 +1399,16 @@ fn Gen.prim(mut self, i mir.Inst)
+                     a.mov32_mr(mem, v)
+         "pfence" | "pfence_io" =>
+             a.mfence()
++        "port_out8" =>
++            parallel([move_of(RDX, i.arg(0)), move_of(RAX, i.arg(1))])
++            a.out_dx_al()
++        "port_in8" =>
++            parallel([move_of(RDX, i.arg(0))])
++            a.mov_ri(RAX, 0)
++            a.in_al_dx()
++            put_gpr(i.dst, RAX)
++        "halt" =>
++            a.hlt()
+         "syscall" =>
+             regs := [RAX, RDI, RSI, RDX, S0, R8, R9]
+             parallel([move_of(regs[k], i.arg(k)) for k in 0..i.argc()])
+@@ -1474,7 +1500,7 @@ fn Gen.prim(mut self, i mir.Inst)
+             put_gpr(i.dst, d)
+         "target" =>
+             d := out_gpr(i.dst, S1)
+-            a.mov_ri(d, if win then 3 else 0)
++            a.mov_ri(d, if none then 4 else if win then 3 else 0)
+             put_gpr(i.dst, d)
+         "code_tab" =>
+             d := out_gpr(i.dst, S1)
+diff --git a/compiler/x64/win_call.ail b/compiler/x64/win_call.ail
+index c4ab6679..3065b827 100644
+--- a/compiler/x64/win_call.ail
++++ b/compiler/x64/win_call.ail
+@@ -86,7 +86,7 @@ pub fn generate_windows(m mir.Module) codegen.Image
+         if is_kernel(f.name)
+             gen_kernel(mut img, f.name)
+         else
+-            gen_func(mut img, m, sites, f, true)
++            gen_func(mut img, m, sites, f, true, false)
+     codegen.add_call_table(mut img, m)
+     img
+ 

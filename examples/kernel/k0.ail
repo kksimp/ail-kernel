@@ -1,0 +1,7 @@
+## K0 of the kernel proof of concept (ADR 0953): boot under QEMU, print one
+## JSON line on COM1, exit through the debug-exit port.
+## Build: ail build examples/kernel/k0.ail --target x86_64-none -o k0.elf
+## Run:   tools/kernel/mkiso.sh k0.elf k0.iso && tools/kernel/run.sh k0.iso
+fn main()
+    print("{\"ev\":\"boot\",\"kernel\":\"ail-k\"}")
+    print("{\"ev\":\"done\",\"gcs\":0,\"panics\":0}")
