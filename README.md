@@ -2,11 +2,11 @@
 
 A proof of concept for writing a kernel or driver in AIL with the garbage collector on. **Status: PAUSED until ail 0.1.0 is released.** See [PAUSED.md](PAUSED.md).
 
-Licence: not set yet. The repo is private; the other app repos are AGPL-3.0, but no LICENSE file is added until the designer decides.
+Licence: AGPL-3.0 (see LICENSE), private, like the other app repos.
 
 ## Layout
 - `docs/design/kernel-poc.md`: the design (GC with no OS, interrupts, DMA pinning, milestones K0-K5).
-- `docs/decisions/0953-freestanding-targets-and-kernel-poc.md`: ADR 0953 (Proposed). Copied here; the ADR number belongs to the ail repo's index.
+- ADR 0953 (freestanding targets, Proposed) lives in kksimp/ail, because it changes the language/compiler: `docs/decisions/0953-freestanding-targets-and-kernel-poc.md` on branch `claude/project-thread-egc4ma`.
 - `examples/kernel/k0.ail`: boot example (serial output).
 - `tools/kernel/{run,mkiso,job}.sh`: QEMU runner, Limine ISO maker, ail-linux job script.
 - `patches/ail-compiler-x86_64-none.patch`: the compiler changes the kernel needs (freestanding `x86_64-none` target, runtime, port I/O). These belong in `kksimp/ail` and are kept here for reference only.
