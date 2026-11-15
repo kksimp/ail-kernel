@@ -3,6 +3,7 @@
 # Usage: tools/kernel/run.sh IMAGE.iso [TIMEOUT_S]   (runs on Kaleb's machines, not in cloud containers)
 # The kernel prints one JSON object per line on COM1 and exits through the
 # isa-debug-exit device: the exit status is (code << 1) | 1, so success (code 0) is 1.
+# 1G of guest memory: an x86_64-none image reserves a 256 MiB arena in its zero-filled segment.
 set -u
 img=${1:?usage: run.sh IMAGE.iso [TIMEOUT_S]}
 secs=${2:-60}
@@ -10,7 +11,7 @@ out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 accel=tcg
 [ -w /dev/kvm ] && accel=kvm
-timeout "$secs" qemu-system-x86_64 -accel "$accel" -m 256M -cdrom "$img" \
+timeout "$secs" qemu-system-x86_64 -accel "$accel" -m 1G -cdrom "$img" \
   -display none -no-reboot -serial "file:$out" \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
   $( [ "$accel" = tcg ] && echo "-icount shift=auto" )
