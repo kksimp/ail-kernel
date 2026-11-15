@@ -1,14 +1,19 @@
 # A kernel in AIL, with the garbage collector kept (proof of concept)
 
-- **Status:** Proposal (design first; no code yet)
+- **Status:** Proposal. K0 and the G1-G3 compiler slice are written, not yet
+  compiled or booted (see [STATUS.md](../../STATUS.md)).
 - **Date:** 2026-11-05
 - **Asked by:** the designer, 2026-11-05: kernels and drivers have been
   written without a collector because "it has always been done that way";
   test whether a collected kernel works.
 - **Fixed by the designer:** no no-GC mode, no 32-bit support (including wasm32).
-- **Builds on:** [ADR 0820](../decisions/0820-driver-level-unsafe.md),
-  [ADR 0835](../decisions/0835-native-raw-pointers-and-hw.md),
-  [native-abi.md](native-abi.md). [ADR 0953](../decisions/0953-freestanding-targets-and-kernel-poc.md) records the build plan.
+- **Builds on:** ADR 0820 (`docs/decisions/0820-driver-level-unsafe.md`),
+  ADR 0835 (`docs/decisions/0835-native-raw-pointers-and-hw.md`) and
+  `docs/design/native-abi.md`, all in kksimp/ail. ADR 0953
+  (`docs/decisions/0953-freestanding-targets-and-kernel-poc.md`, kksimp/ail
+  branch `claude/project-thread-tf8k0t`) records the build plan.
+- **Paths:** `compiler/...` and `docs/decisions/...` name files in kksimp/ail;
+  `examples/kernel/` and `tools/kernel/` are in this repository.
 
 ## The claim on trial
 
@@ -31,7 +36,7 @@ Missing, in build order:
 
 | # | Gap | Where |
 |---|---|---|
-| G1 | Target `x64-none`: static ELF at a fixed load address, no `PT_INTERP`, entry symbol, no syscall shim | `compiler/obj/elf.ail`, `compiler/main.ail` |
+| G1 | Target `x86_64-none`: static ELF at a fixed load address, no `PT_INTERP`, entry symbol, no syscall shim | `compiler/obj/elf.ail`, `compiler/main.ail` |
 | G2 | Runtime hooks replacing the OS calls: `rt_mem(n)` (heap memory), `rt_stack_top`, `rt_putc` (serial), `rt_panic` | `compiler/rt/native/` new `none.ail`, selected by target |
 | G3 | Port I/O `hw.in8/16/32`, `hw.out8/16/32`; intrinsics `hlt cli sti rdtsc rdmsr wrmsr lgdt lidt ltr invlpg` and control-register moves | `lower_unsafe.ail`, `x64/asm.ail` (intrinsics only, no free-form asm: decided) |
 | G4 | `@interrupt fn`: compiler-made prologue and `iretq`, saves all registers, **rejected at check time if it can allocate** (ADR 0820 step 5) | checker plus a new `lower_interrupt.ail` (ADR 0823) |
@@ -134,7 +139,7 @@ A stress task allocates while ticks arrive. Proves G4 and the interrupt rule.
 K3 Tasks and syscalls: kernel tasks with a round-robin scheduler; `syscall`
 entry; a ring-3 static ELF user program using a Linux subset (`write`,
 `exit`, `exit_group`, `brk`, `mmap` anonymous, `getpid`, `clock_gettime`,
-`nanosleep`). The user program is built from AIL `x64-none` too (no libc).
+`nanosleep`). The user program is built from AIL `x86_64-none` too (no libc).
 Proves the "Linux-like" ABI claim.
 
 K4 Driver: a virtio-blk or virtio-rng driver with a DMA ring using the pin
@@ -179,10 +184,11 @@ waits on whom), not as real-hardware microseconds. Absolute numbers need KVM or 
 
 ## Where the code goes
 
-`examples/kernel/` holds the kernel and the user program (ordinary AIL, built
-with `ail build --target x64-none --unsafe driver`). Compiler and runtime
-changes G1-G6 are separate small PRs, each with the usual rule IDs and ADRs.
-No kernel code goes into `compiler/`. Test harness: `tools/kernel/`.
+This repository's `examples/kernel/` holds the kernel and the user program
+(ordinary AIL, built with `ail build --target x86_64-none --unsafe driver`).
+Compiler and runtime changes G1-G6 go to kksimp/ail as separate small PRs,
+each with the usual rule IDs and ADRs; no kernel code goes into its
+`compiler/`. Test harness: this repository's `tools/kernel/`.
 
 ## Risks
 
