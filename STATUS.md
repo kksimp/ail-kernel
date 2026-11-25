@@ -1,14 +1,16 @@
-# Status (2026-11-15)
+# Status (2026-11-25)
 
-Resumed against ail v0.1.0 (released 2026-11-15). The pause noted on
-2026-11-11 is over.
+Pinned to ail v0.2.0 (released 2026-11-21, seed `seed-2026.11.21a`) plus
+the freestanding patch. Before that: v0.1.0 (2026-11-15).
 
 ## Done
 - Design: [docs/design/kernel-poc.md](docs/design/kernel-poc.md). ADR 0953
   (freestanding targets, Proposed) is in kksimp/ail.
 - Compiler slice G1-G3 (`x86_64-none` target and entry, serial/arena runtime,
-  port I/O): ail branch `claude/project-thread-tf8k0t`, v0.1.0 plus the
-  freestanding-target patch. A copy is in `patches/`.
+  port I/O): ail branch `claude/project-thread-1qz079`, v0.2.0 plus the
+  freestanding-target patch (ported from the v0.1.0 branch
+  `claude/project-thread-tf8k0t`; the memory checks of `box_init`, new in
+  v0.2.0, and `mem_alloc` now use `mem_failed`). A copy is in `patches/`.
 - K0 example: `examples/kernel/k0.ail` (two JSON lines on COM1, then exit).
 - Runner: `tools/kernel/job.sh` (on ail-linux), `run-remote.sh` (from the
   Mac), `mkiso.sh` (Limine ISO), `run.sh` (QEMU boot and trace summary).

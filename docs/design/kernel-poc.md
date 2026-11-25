@@ -11,7 +11,7 @@
   ADR 0835 (`docs/decisions/0835-native-raw-pointers-and-hw.md`) and
   `docs/design/native-abi.md`, all in kksimp/ail. ADR 0953
   (`docs/decisions/0953-freestanding-targets-and-kernel-poc.md`, kksimp/ail
-  branch `claude/project-thread-tf8k0t`) records the build plan.
+  branch `claude/project-thread-1qz079`) records the build plan.
 - **Paths:** `compiler/...` and `docs/decisions/...` name files in kksimp/ail;
   `examples/kernel/` and `tools/kernel/` are in this repository.
 
